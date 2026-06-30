@@ -30,11 +30,7 @@ function love.draw()
     love.graphics.setColor(255/255, 129/255, 0)
     love.graphics.circle("fill", width * 0.8, height * 0.1, height * sun_radius_ratio)
 
-    if death then
-        love.graphics.setFont(debug_font)
-        love.graphics.setColor(0, 0, 0)
-        love.graphics.print("You died. There's no second chances here!", 10, height / 2)
-    else
+    if not death then
 
         -- Rocks
         for _, rock in ipairs(rockList) do rock:draw() end
@@ -136,6 +132,44 @@ function love.draw()
             love.graphics.setLineWidth(1)
         end
 
+        -- Clockwise spin indicator when fish is hooked and cursor is above water
+        if reelLine.active and heldFish then
+            local wTop = height * (1 - water_to_air_ratio)
+            if virtualCursor.y < wTop then
+                local cx     = virtualCursor.x
+                local cy     = virtualCursor.y
+                local r      = 34
+                local t      = love.timer.getTime()
+                local startA = t * 2.5                  -- arc rotates clockwise to show direction
+                local arcLen = math.pi * 5 / 3          -- 300-degree arc
+                local endA   = startA + arcLen
+                local steps  = 32
+                local glow   = math.min(1, reelLine.spinRate * 12)
+                love.graphics.setColor(1, 0.9 - glow * 0.4, 0, 0.5 + glow * 0.45)
+                love.graphics.setLineWidth(2.5)
+                local pts = {}
+                for i = 0, steps do
+                    local a = startA + (i / steps) * arcLen
+                    pts[2*i+1] = cx + math.cos(a) * r
+                    pts[2*i+2] = cy + math.sin(a) * r
+                end
+                love.graphics.line(pts)
+                -- Arrowhead at end of arc pointing in clockwise direction
+                local ex = cx + math.cos(endA) * r
+                local ey = cy + math.sin(endA) * r
+                local tx = -math.sin(endA)   -- clockwise tangent
+                local ty =  math.cos(endA)
+                local px =  math.cos(endA)   -- outward normal
+                local py =  math.sin(endA)
+                local hs = 8
+                love.graphics.polygon("fill",
+                    ex + tx*hs,                    ey + ty*hs,
+                    ex - tx*hs*0.5 + px*hs*0.7,   ey - ty*hs*0.5 + py*hs*0.7,
+                    ex - tx*hs*0.5 - px*hs*0.7,   ey - ty*hs*0.5 - py*hs*0.7)
+                love.graphics.setLineWidth(1)
+            end
+        end
+
         -- Ocean current arrows
         do
             local spd = math.sqrt(current.vx^2 + current.vy^2)
@@ -224,21 +258,47 @@ function love.draw()
             love.graphics.setLineWidth(1)
         end
 
-        -- Cursor
+        -- Cursor: image swaps based on state
+        local cursorImg
+        if heldFish then
+            cursorImg = rod_img
+        elseif virtualCursor.y >= waterY then
+            cursorImg = hook_img
+        else
+            cursorImg = cursor
+        end
         if virtualCursor.stunTimer > 0 then
             love.graphics.setColor(0.6, 0.2, 1.0)
         elseif virtualCursor.isDashing then
             love.graphics.setColor(1, 0.2, 0.2)
-        elseif virtualCursor.y < waterY then
-            love.graphics.setColor(1, 1, 0)
         else
-            love.graphics.setColor(0.55, 0.20, 0.04)
+            love.graphics.setColor(1, 1, 1)
         end
-        love.graphics.draw(cursor, virtualCursor.x, virtualCursor.y, 0, cursorScale, cursorScale, 0, 0)
+        love.graphics.draw(cursorImg, virtualCursor.x, virtualCursor.y, 0, cursorScale, cursorScale, 0, 0)
         love.graphics.setColor(1, 1, 1)
     end
 
     if camera.enabled then love.graphics.pop() end
+
+    -- Death screen (screen space so it's unaffected by camera zoom)
+    if death then
+        love.graphics.setColor(0, 0, 0, 0.72)
+        love.graphics.rectangle("fill", 0, 0, width, height)
+        love.graphics.setFont(debug_font)
+        love.graphics.setColor(1, 0.25, 0.25)
+        love.graphics.printf("You died.", 0, height / 2 - 50, width, "center")
+        -- Restart button
+        local bx = width / 2 - 80
+        local by = height / 2
+        local bw = 160
+        local bh = 40
+        local mx, my = love.mouse.getPosition()
+        local hover = mx >= bx and mx <= bx + bw and my >= by and my <= by + bh
+        love.graphics.setColor(hover and {0.9, 0.25, 0.25, 1} or {0.6, 0.15, 0.15, 1})
+        love.graphics.rectangle("fill", bx, by, bw, bh, 7, 7)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.printf("Restart  (R)", bx, by + 12, bw, "center")
+    end
 
     -- Sand-cloud blindness: when cursor is inside a cloud, black out the screen
     -- except for a tiny circle of vision around the cursor tip.
@@ -327,9 +387,20 @@ function love.draw()
     -- HUD (screen space — always drawn at native resolution)
     love.graphics.setColor(1, 1, 1)
     love.graphics.setFont(debug_font)
-    -- Oxygen bar
-    love.graphics.setColor(1 - (oxygen_left / oxygen_time), oxygen_left / oxygen_time, 0)
-    love.graphics.rectangle("fill", 10, height - 30, oxygen_left * 10, 20)
+    -- Oxygen bar: top-center, small, hidden when infinite breath is on
+    if not infiniteBreath then
+        local barW   = 260
+        local barH   = 8
+        local barX   = width / 2 - barW / 2
+        local barY   = 6
+        local t      = oxygen_left / oxygen_time
+        -- Dark background track
+        love.graphics.setColor(0.15, 0.15, 0.15, 0.8)
+        love.graphics.rectangle("fill", barX, barY, barW, barH, 3, 3)
+        -- Filled portion: cyan when full → red when empty
+        love.graphics.setColor(1 - t * 0.8, 0.2 + t * 0.6, t, 0.9)
+        love.graphics.rectangle("fill", barX, barY, barW * t, barH, 3, 3)
+    end
     if not death then
         love.graphics.setColor(1, 1, 1)
         love.graphics.print("FPS: "  .. tostring(love.timer.getFPS()), 10, 10)
@@ -338,7 +409,71 @@ function love.draw()
         if camera.enabled then
             love.graphics.print("CAM x" .. camera.zoom, width / 2 - 30, 10)
         end
-        love.graphics.print("Line: " .. tostring(math.floor(lineTetherLength)) .. "px", 10, 30)
+        if reelLine.active and heldFish then
+            local wTop = height * (1 - water_to_air_ratio)
+            if virtualCursor.y < wTop then
+                love.graphics.setColor(1, 1, 0)
+                love.graphics.print("Spin mouse CW  or  W→D→S→A  to reel!   Line: " .. tostring(math.floor(lineTetherLength)) .. "px", 10, 30)
+            else
+                love.graphics.setColor(1, 0.5, 0)
+                love.graphics.print("Surface above water to reel!   Line: " .. tostring(math.floor(lineTetherLength)) .. "px", 10, 30)
+            end
+            love.graphics.setColor(1, 1, 1)
+        else
+            love.graphics.print("Line: " .. tostring(math.floor(lineTetherLength)) .. "px", 10, 30)
+        end
+
+        -- Function key legend (top-right)
+        local lx = width - 220
+        local ly = 10
+        local lh = 18
+        love.graphics.setColor(0, 0, 0, 0.45)
+        love.graphics.rectangle("fill", lx - 4, ly - 4, 224, lh * 8 + 8)
+        love.graphics.setColor(camera.enabled and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F1  Camera View: " .. (camera.enabled and "ON" or "OFF"), lx, ly)
+        love.graphics.setColor(currentsEnabled and {0.7, 0.7, 0.7, 1} or {0.3, 1, 0.3, 1})
+        love.graphics.print("F2  Currents: " .. (currentsEnabled and "ON" or "OFF"), lx, ly + lh)
+        love.graphics.setColor(stickyFish and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F4  Sticky Fish: " .. (stickyFish and "ON" or "OFF"), lx, ly + lh * 2)
+        love.graphics.setColor(0.7, 0.7, 0.7, 1)
+        love.graphics.print("F5  Hot Reload", lx, ly + lh * 3)
+        love.graphics.setColor(debugMode and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F6  Debug Mode: " .. (debugMode and "ON" or "OFF"), lx, ly + lh * 4)
+        love.graphics.setColor(singleKeyReel and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F7  Single-Key Reel: " .. (singleKeyReel and "ON" or "OFF"), lx, ly + lh * 5)
+        love.graphics.setColor(infiniteBreath and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F8  Infinite Breath: " .. (infiniteBreath and "ON" or "OFF"), lx, ly + lh * 6)
+        love.graphics.setColor(unbitable and {0.3, 1, 0.3, 1} or {0.7, 0.7, 0.7, 1})
+        love.graphics.print("F9  Unbitable: " .. (unbitable and "ON" or "OFF"), lx, ly + lh * 7)
+        love.graphics.setColor(1, 1, 1)
+    end
+
+    -- Pause / escape menu (drawn last so it sits over everything)
+    if paused then
+        local bx      = width / 2 - 80
+        local bw      = 160
+        local bh      = 44
+        local resumeY  = height / 2 - 10
+        local restartY = height / 2 + 50
+        local quitY    = height / 2 + 110
+        local mx, my  = love.mouse.getPosition()
+
+        local function menuBtn(label, by, r, g, b)
+            local hover = mx >= bx and mx <= bx + bw and my >= by and my <= by + bh
+            love.graphics.setColor(hover and {r, g, b, 1} or {r * 0.6, g * 0.6, b * 0.6, 1})
+            love.graphics.rectangle("fill", bx, by, bw, bh, 7, 7)
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.printf(label, bx, by + 13, bw, "center")
+        end
+
+        love.graphics.setColor(0, 0, 0, 0.78)
+        love.graphics.rectangle("fill", 0, 0, width, height)
+        love.graphics.setFont(debug_font)
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.printf("PAUSED", 0, height / 2 - 80, width, "center")
+        menuBtn("Resume   (Esc)", resumeY,  0.25, 0.75, 0.35)
+        menuBtn("Restart  (R)",   restartY, 0.25, 0.45, 0.85)
+        menuBtn("Quit",           quitY,    0.75, 0.25, 0.25)
     end
 end
 

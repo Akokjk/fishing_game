@@ -16,6 +16,7 @@ return {
     Puff           = require("actions.puff"),
     SlowSwim       = require("actions.slow_swim"),
     FightPlayer    = require("actions.fight_player"),
+    FightLine      = require("actions.fight_line"),
     HoverSwim      = require("actions.hover_swim"),
     EatKrillPuff          = require("actions.eat_krill_puffer"),
     FaceClosestPredator   = require("actions.face_closest_predator"),

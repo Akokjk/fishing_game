@@ -38,6 +38,11 @@ function SmallFish.new(x, y)
     }    
     -- THE BRAIN
     self.brain = BT.Selector:new({
+        -- HOOKED: fight the line by swimming hard toward the bottom
+        BT.Sequence:new({
+            BT.Condition:new(C.CaughtByPlayer),
+            BT.Action:new(A.FightLine)
+        }),
         -- ACTIVE THREAT: flee / hide
         BT.Sequence:new({
             BT.Condition:new(C.SeesPredator),

@@ -55,6 +55,21 @@ predatorBiteRadius = 8  -- kill zone radius for predator fish (shared by draw + 
 lineTetherMax    = 300   -- hard cap on line length
 lineTetherLength = 50   -- adjustable via scroll / up-down, range 10–lineTetherMax
 lineTetherStep   = 5    -- px per scroll tick / arrow key press
+-- Clockwise spin reel mechanic
+reelLine = {
+    active   = false,
+    prevDx   = 0,
+    prevDy   = 0,
+    spinRate = 0,   -- instantaneous clockwise spin this frame (for visual feedback)
+}
+REEL_RATE = 20      -- pixels of line reeled per radian of clockwise cursor spin
+wasdReel       = { lastKey = nil }  -- tracks WASD clockwise reel sequence
+stickyFish     = false              -- F4: keep fish hooked without holding click
+currentsEnabled = true              -- F2: toggle ocean current + vortices
+paused          = false             -- Escape: pause / escape menu
+singleKeyReel   = false             -- F7: hold W above water to reel
+infiniteBreath  = false             -- F8: unlimited oxygen, hides meter
+unbitable       = false             -- F9: immune to predator / puffer bites
 fishCaught       = 0
 krillSpawnTimer  = 0
 krillSpawnInterval = 0.4
@@ -96,7 +111,7 @@ function _G.reloadGameModules()
         "actions.zigzag", "actions.thrash", "actions.eat_krill",
         "actions.school", "actions.swim", "actions.chase_cursor",
         "actions.chase_prey", "actions.hide_in_cloud", "actions.jump", "animals.shark",
-        "actions.flap_tail", "actions.flee_from_predator", "actions.puff", "actions.face_closest_predator",
+        "actions.flap_tail", "actions.flee_from_predator", "actions.puff", "actions.face_closest_predator", "actions.fight_line",
         "actions.slow_swim", "actions.fight_player", "actions.hover_swim", "actions.eat_krill_puffer",
         "conditions.is_puffed", "conditions.caught_by_player", "conditions.sees_krill", "conditions.puffer_sees_predator",
         "animals.puffer_fish",

@@ -1,8 +1,15 @@
 function love.update(rawDt)
-    if love.keyboard.isDown("escape") then love.event.quit() end
     hotreload.check("f5")
 
-    if death then return end
+    if paused then
+        love.mouse.setRelativeMode(false)
+        return
+    end
+
+    if death then
+        love.mouse.setRelativeMode(false)
+        return
+    end
     local dt = rawDt * timeScale
 
     -- 1. Oxygen & environment
@@ -11,16 +18,16 @@ function love.update(rawDt)
     local activeMaxSpeed = virtualCursor.baseMaxSpeed
 
     if isUnderwater then
-        if love.mouse.isDown(2) and oxygen_left > 0 then
+        if love.mouse.isDown(2) and (infiniteBreath or oxygen_left > 0) then
             virtualCursor.isDashing = true
-            oxygen_left  = oxygen_left - (dt * 4)
+            if not infiniteBreath then oxygen_left = oxygen_left - (dt * 4) end
             activeAccel  = virtualCursor.dashAccel
             activeMaxSpeed = virtualCursor.dashMaxSpeed
         else
             virtualCursor.isDashing = false
-            oxygen_left = oxygen_left - dt
+            if not infiniteBreath then oxygen_left = oxygen_left - dt end
         end
-        if oxygen_left <= 0 then
+        if not infiniteBreath and not unbitable and oxygen_left <= 0 then
             oxygen_left = 0
             death = true
         end
@@ -50,6 +57,40 @@ function love.update(rawDt)
     local mdy = virtualCursor._pendingDy or 0
     virtualCursor._pendingDx = 0
     virtualCursor._pendingDy = 0
+
+    -- Clockwise spin reel: detect angular rotation of cursor motion direction
+    do
+        local prevDx    = reelLine.prevDx
+        local prevDy    = reelLine.prevDy
+        reelLine.prevDx = mdx
+        reelLine.prevDy = mdy
+
+        if reelLine.active and heldFish then
+            local speed     = math.sqrt(mdx*mdx + mdy*mdy)
+            local prevSpeed = math.sqrt(prevDx*prevDx + prevDy*prevDy)
+            local spin = 0
+            if speed > 5 and prevSpeed > 5 then
+                -- cross > 0 means velocity vector is turning clockwise (Y-down screen space)
+                local cross = prevDx * mdy - prevDy * mdx
+                local dot   = prevDx * mdx + prevDy * mdy
+                spin = math.max(0, math.atan2(cross, dot))
+            end
+            reelLine.spinRate = spin
+            -- Only reel when cursor is above the water surface
+            if not isUnderwater and spin > 0 then
+                lineTetherLength = math.max(10, lineTetherLength - spin * REEL_RATE)
+            end
+        else
+            reelLine.spinRate = 0
+        end
+    end
+
+    -- Single-key reel: hold W above water when F7 mode is on
+    if singleKeyReel and reelLine.active and heldFish and not isUnderwater then
+        if love.keyboard.isDown("w") then
+            lineTetherLength = math.max(10, lineTetherLength - 100 * dt)
+        end
+    end
 
     -- Accumulate current drift
     if isUnderwater then
@@ -119,34 +160,40 @@ function love.update(rawDt)
     blackboard.current      = current
 
     -- Ocean current state machine
-    do
-        current.stateTimer = current.stateTimer - dt
-        if current.stateTimer <= 0 then
-            if current.isDead then
-                -- Switch to a flowing period
-                current.isDead     = false
-                current.stateTimer = 6 + math.random() * 10   -- 6-16 s flowing
-                local strength     = 150 + math.random() * 250  -- 150-400 px/s
-                local dir          = math.random() < 0.5 and 1 or -1
-                current.targetVx   = strength * dir
-                current.targetVy   = math.max(-25, (math.random() - 0.5) * strength * 0.35)
-            else
-                -- Switch to a dead calm period
-                current.isDead     = true
-                current.stateTimer = 2 + math.random() * 4    -- 2-6 s calm
-                current.targetVx   = 0
-                current.targetVy   = 0
+    if currentsEnabled then
+        do
+            current.stateTimer = current.stateTimer - dt
+            if current.stateTimer <= 0 then
+                if current.isDead then
+                    -- Switch to a flowing period
+                    current.isDead     = false
+                    current.stateTimer = 6 + math.random() * 10   -- 6-16 s flowing
+                    local strength     = 150 + math.random() * 250  -- 150-400 px/s
+                    local dir          = math.random() < 0.5 and 1 or -1
+                    current.targetVx   = strength * dir
+                    current.targetVy   = math.max(-25, (math.random() - 0.5) * strength * 0.35)
+                else
+                    -- Switch to a dead calm period
+                    current.isDead     = true
+                    current.stateTimer = 2 + math.random() * 4    -- 2-6 s calm
+                    current.targetVx   = 0
+                    current.targetVy   = 0
+                end
             end
+            -- Smooth lerp toward target
+            local lerpRate = current.isDead and 1.5 or 0.4
+            current.vx = current.vx + (current.targetVx - current.vx) * math.min(1, lerpRate * dt)
+            current.vy = current.vy + (current.targetVy - current.vy) * math.min(1, lerpRate * dt)
         end
-        -- Smooth lerp toward target
-        local lerpRate = current.isDead and 1.5 or 0.4
-        current.vx = current.vx + (current.targetVx - current.vx) * math.min(1, lerpRate * dt)
-        current.vy = current.vy + (current.targetVy - current.vy) * math.min(1, lerpRate * dt)
+    else
+        -- Smoothly kill the current when disabled
+        current.vx = current.vx + (0 - current.vx) * math.min(1, 4 * dt)
+        current.vy = current.vy + (0 - current.vy) * math.min(1, 4 * dt)
     end
 
     -- Vortex spawn & update
     vortexSpawnTimer = vortexSpawnTimer - dt
-    if vortexSpawnTimer <= 0 and #vortexList < 3 then
+    if currentsEnabled and vortexSpawnTimer <= 0 and #vortexList < 3 then
         vortexSpawnTimer = 8 + math.random() * 12
         local waterTop = height * (1 - water_to_air_ratio)
         local sandTop  = height - sandHeight
@@ -312,7 +359,9 @@ function love.update(rawDt)
                 pop_sound:stop()
                 pop_sound:setPitch(1.0 + (math.random() * 0.4 - 0.2))
                 pop_sound:play()
-                heldFish = nil
+                heldFish         = nil
+                reelLine.active  = false
+                lineTetherLength = 50
             end
         end
     end
@@ -455,8 +504,10 @@ function love.update(rawDt)
                     local tx = virtualCursor.x - tailX
                     local ty = virtualCursor.y - tailY
                     if tx*tx + ty*ty > tailR * tailR then
-                        death = true
-                        crunch_sound:stop(); crunch_sound:play()
+                        if not unbitable then
+                            death = true
+                            crunch_sound:stop(); crunch_sound:play()
+                        end
                     end
                 end
             end
@@ -524,7 +575,7 @@ function love.update(rawDt)
             local hx = p.vx / spd
             local hy = p.vy / spd
 
-            if not death then
+            if not death and not unbitable then
                 local cx    = virtualCursor.x - p.x
                 local cy    = virtualCursor.y - p.y
                 local cdist = math.sqrt(cx*cx + cy*cy)
@@ -540,7 +591,7 @@ function love.update(rawDt)
                 local dist = math.sqrt(dx*dx + dy*dy)
                 if dist < coneRange and dist > 0 and not f.isHiding and not f.isAirborne then
                     if (dx/dist)*hx + (dy/dist)*hy > coneHalfCos then
-                        if school[i] == heldFish then heldFish = nil end
+                        if school[i] == heldFish then heldFish = nil; reelLine.active = false; lineTetherLength = 50 end
                         table.remove(school, i)
                         p:bite()
                         eat_sound:stop()
@@ -584,7 +635,7 @@ function love.update(rawDt)
             local dx = f.x - noseX
             local dy = f.y - noseY
             if dx*dx + dy*dy < br2 then
-                if school[i] == heldFish then heldFish = nil end
+                if school[i] == heldFish then heldFish = nil; reelLine.active = false; lineTetherLength = 50 end
                 table.remove(school, i)
                 eat_sound:stop(); eat_sound:play()
                 table.insert(bloodClouds, {
@@ -624,7 +675,9 @@ function love.update(rawDt)
 end
 
 function love.wheelmoved(x, y)
-    lineTetherLength = math.max(10, math.min(lineTetherMax, lineTetherLength - y * lineTetherStep))
+    if not reelLine.active then
+        lineTetherLength = math.max(10, math.min(lineTetherMax, lineTetherLength - y * lineTetherStep))
+    end
 end
 
 function love.mousemoved(x, y, dx, dy, istouch)
@@ -633,17 +686,51 @@ function love.mousemoved(x, y, dx, dy, istouch)
 end
 
 function love.keypressed(key)
-    if key == "up" then
+    if key == "escape" then
+        if not death then
+            paused = not paused
+            love.mouse.setRelativeMode(not paused)
+        end
+        return
+    end
+
+    if death and (key == "r" or key == "return") then
+        love.load()
+        return
+    end
+
+    if paused then return end   -- block all other keys while paused
+
+    if key == "up" and not reelLine.active then
         lineTetherLength = math.max(10, math.min(lineTetherMax, lineTetherLength + lineTetherStep))
-    elseif key == "down" then
+    elseif key == "down" and not reelLine.active then
         lineTetherLength = math.max(10, math.min(lineTetherMax, lineTetherLength - lineTetherStep))
-    elseif key == "c" then
+    elseif key == "f1" then
         camera.enabled = not camera.enabled
         -- Snap to cursor immediately so there's no swooping catch-up on enable
         camera.x = virtualCursor.x
         camera.y = virtualCursor.y
-    elseif key == "d" then
-        debugMode = not debugMode
+        saveSettings()
+    elseif key == "f2" then
+        currentsEnabled = not currentsEnabled
+        if not currentsEnabled then
+            -- Kill current and wipe vortices immediately
+            current.targetVx = 0
+            current.targetVy = 0
+            current.isDead   = true
+            vortexList       = {}
+        end
+        saveSettings()
+    elseif key == "f6" then
+        debugMode = not debugMode;      saveSettings()
+    elseif key == "f7" then
+        singleKeyReel = not singleKeyReel; saveSettings()
+    elseif key == "f8" then
+        infiniteBreath = not infiniteBreath; saveSettings()
+    elseif key == "f9" then
+        unbitable = not unbitable;      saveSettings()
+    elseif key == "f4" then
+        stickyFish = not stickyFish;    saveSettings()
     elseif key == "x" then
         virtualCursor.useHardwareCursor = not virtualCursor.useHardwareCursor
         if virtualCursor.useHardwareCursor then
@@ -651,10 +738,64 @@ function love.keypressed(key)
             virtualCursor.vy = 0
         end
     end
+
+    -- WASD clockwise reel: W→D→S→A→W, each valid clockwise step reels in 25px
+    if key == "w" or key == "a" or key == "s" or key == "d" then
+        local cwNext = { w = "d", d = "s", s = "a", a = "w" }
+        if reelLine.active and heldFish then
+            local aboveWater = virtualCursor.y < height * (1 - water_to_air_ratio)
+            if aboveWater and wasdReel.lastKey and cwNext[wasdReel.lastKey] == key then
+                lineTetherLength = math.max(10, lineTetherLength - 25)
+            end
+        end
+        wasdReel.lastKey = key   -- always track last key for sequence continuity
+    end
 end
 
 function love.mousepressed(x, y, button, istouch, presses)
+    if paused then
+        if button == 1 then
+            local bx = width / 2 - 80
+            local resumeY  = height / 2 - 10
+            local restartY = height / 2 + 50
+            local quitY    = height / 2 + 110
+            if x >= bx and x <= bx + 160 then
+                if y >= resumeY  and y <= resumeY  + 44 then
+                    paused = false
+                    love.mouse.setRelativeMode(true)
+                elseif y >= restartY and y <= restartY + 44 then
+                    love.load()
+                elseif y >= quitY    and y <= quitY    + 44 then
+                    love.event.quit()
+                end
+            end
+        end
+        return
+    end
+
+    if death then
+        if button == 1 then
+            local bx = width / 2 - 80
+            local by = height / 2
+            if x >= bx and x <= bx + 160 and y >= by and y <= by + 40 then
+                love.load()
+            end
+        end
+        return
+    end
+
     if button == 1 then
+        -- Sticky mode: clicking again releases the hooked fish
+        if stickyFish and heldFish then
+            heldFish.vx      = 0
+            heldFish.vy      = 0
+            heldFish         = nil
+            heldFishByTail   = false
+            lineTetherLength = 50
+            reelLine.active  = false
+            return
+        end
+
         -- Rocks take priority (use virtualCursor position — relative mouse mode)
         local cx, cy = virtualCursor.x, virtualCursor.y
         for i = #rockList, 1, -1 do
@@ -731,8 +872,13 @@ function love.mousepressed(x, y, button, istouch, presses)
         end
 
         if best then
-            heldFish       = best
-            heldFishByTail = bestByTail
+            heldFish         = best
+            heldFishByTail   = bestByTail
+            -- Line snaps out to max; player must spin CW above water to reel in
+            lineTetherLength = lineTetherMax
+            reelLine.active  = true
+            reelLine.prevDx  = 0
+            reelLine.prevDy  = 0
         end
     end
 end
@@ -745,11 +891,13 @@ function love.mousereleased(x, y, button)
             heldRock.hideCooldown = 10
             heldRock = nil
         end
-        if heldFish then
-            heldFish.vx    = 0
-            heldFish.vy    = 0
-            heldFish       = nil
-            heldFishByTail = false
+        if heldFish and not stickyFish then
+            heldFish.vx      = 0
+            heldFish.vy      = 0
+            heldFish         = nil
+            heldFishByTail   = false
+            lineTetherLength = 50
+            reelLine.active  = false
         end
     end
 end
